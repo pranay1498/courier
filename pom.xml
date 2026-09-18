@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- This parent inherits Spring Boot's dependency management -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.0</version>
+        <relativePath/>
+    </parent>
+
+    <!-- Our project coordinates -->
+    <groupId>com.courier</groupId>
+    <artifactId>courier</artifactId>
+    <version>1.0.0</version>
+
+    <!-- packaging=pom means this is a container, not a JAR -->
+    <packaging>pom</packaging>
+    <name>Courier - Distributed Notification Platform</name>
+
+    <!-- Declare all child modules -->
+    <modules>
+        <module>courier-common</module>
+        <module>courier-api</module>
+        <module>courier-worker</module>
+        <module>courier-dashboard</module>
+    </modules>
+
+    <!-- Global properties - applies to all child modules -->
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <lombok.version>1.18.38</lombok.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <!--
+        dependencyManagement: declare versions once here.
+        Child modules add the dependency WITHOUT a version tag.
+        The version is resolved from here automatically.
+        This means you never have version conflicts across modules.
+    -->
+    <dependencyManagement>
+        <dependencies>
+
+            <!-- courier-common is used by all three service modules -->
+            <dependency>
+                <groupId>com.courier</groupId>
+                <artifactId>courier-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- Kafka -->
+            <dependency>
+                <groupId>org.springframework.kafka</groupId>
+                <artifactId>spring-kafka</artifactId>
+                <version>3.1.0</version>
+            </dependency>
+
+            <!-- Kafka test support -->
+            <dependency>
+                <groupId>org.springframework.kafka</groupId>
+                <artifactId>spring-kafka-test</artifactId>
+                <version>3.1.0</version>
+                <scope>test</scope>
+            </dependency>
+
+            <!-- Testcontainers for integration tests -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers</artifactId>
+                <version>1.19.3</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>1.19.3</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>kafka</artifactId>
+                <version>1.19.3</version>
+                <scope>test</scope>
+            </dependency>
+
+        </dependencies>
+    </dependencyManagement>
+
+    <!--
+        Dependencies here apply to ALL child modules automatically.
+        Only put things every single module needs.
+        Lombok and testing are genuinely universal here.
+    -->
+    <dependencies>
+
+        <!-- Lombok: @Data, @Builder, @Slf4j etc - every module uses this -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Testing: every module needs JUnit and Mockito -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <!--
+        pluginManagement: configure plugins once here.
+        Child modules that use these plugins inherit the config.
+    -->
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <configuration>
+                        <!-- Exclude Lombok from the final JAR -->
+                        <excludes>
+                            <exclude>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                            </exclude>
+                        </excludes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
+</project>

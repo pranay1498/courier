@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.courier</groupId>
+        <artifactId>courier</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>courier-common</artifactId>
+    <packaging>jar</packaging>
+    <name>Courier Common</name>
+
+    <dependencies>
+
+        <!-- JPA annotations for the Notification entity -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- Bean validation annotations (@NotBlank, @NotNull etc) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- Jackson for JSON serialization of DTOs -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+    </dependencies>
+
+    <!--
+        IMPORTANT: courier-common has NO spring-boot-maven-plugin.
+        It is a library imported by other modules, not a runnable app.
+        Adding the plugin would repackage it as a fat JAR with a
+        specific MANIFEST.MF that other modules cannot import.
+    -->
+
+</project>

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    # Service containers available to the job.
+    # GitHub Actions starts these before the steps run and
+    # exposes them on localhost — same as your local Docker setup.
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: courier
+          POSTGRES_USER: courier_user
+          POSTGRES_PASSWORD: courier_pass
+        ports:
+          - 5432:5432
+        # Wait for PostgreSQL to accept connections before proceeding
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          # Caches ~/.m2 automatically — subsequent runs skip
+          # re-downloading all dependencies
+          cache: maven
+
+      - name: Initialise database schema
+        run: |
+          PGPASSWORD=courier_pass psql \
+            -h localhost \
+            -U courier_user \
+            -d courier \
+            -f init.sql
+
+      - name: Build and run tests
+        run: mvn clean verify
+
+      - name: Upload test results
+        # Runs even if tests fail — so you can see which test failed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/target/surefire-reports/*.xml'
+          retention-days: 7

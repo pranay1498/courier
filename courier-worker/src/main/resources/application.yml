@@ -1,0 +1,65 @@
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 15s
+  application:
+    name: courier-worker
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/courier}
+    username: ${SPRING_DATASOURCE_USERNAME:courier_user}
+    password: ${SPRING_DATASOURCE_PASSWORD:courier_pass}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  data:
+    redis:
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
+
+  kafka:
+    listener:
+      # Wait up to 10 seconds for consumers to finish processing
+      # and commit offsets before the JVM shuts down
+      shutdown-timeout: 10000
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: courier-worker-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.courier.common.*"
+
+server:
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+    prometheus:
+      enabled: true
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: Courier Worker
+    description: Kafka consumer and notification delivery service
+    version: 1.0.0
+
+logging:
+  level:
+    com.courier: DEBUG
+    org.springframework.kafka: INFO
