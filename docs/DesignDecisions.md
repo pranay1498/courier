@@ -252,3 +252,20 @@ events are distinguishable in logs and metrics from original events.
 **Tradeoff accepted:** Each replay creates a new `eventId`, so the delivery attempt
 history shows attempts from both the original delivery and the replay under the same
 `notificationId`. This is correct and intentional - the full audit trail is visible.
+
+### Decision 9: Classifying failures as retryable or permanent
+
+Not every delivery failure is worth retrying. A webhook returning 503 means the
+endpoint is temporarily broken and may recover - retrying is correct. A webhook
+returning 404 means the endpoint does not exist; retrying three times wastes six
+seconds and produces four identical DLQ-bound failures instead of one.
+
+The same applies to input validation. A phone number missing its country code will
+never become valid on retry.
+
+`KafkaConsumerConfig` declares `IllegalArgumentException` and `IllegalStateException`
+as non-retryable via `errorHandler.addNotRetryableExceptions()`. Delivery handlers
+throw `DeliveryException` for transient failures (retry) and `IllegalArgumentException`
+for permanent ones (straight to DLQ). This keeps the classification decision in the
+handler that has the context to make it, while the retry mechanics stay in the Kafka
+error handler.

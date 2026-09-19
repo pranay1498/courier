@@ -12,7 +12,7 @@ jobs:
 
     # Service containers available to the job.
     # GitHub Actions starts these before the steps run and
-    # exposes them on localhost — same as your local Docker setup.
+    # exposes them on localhost - same as your local Docker setup.
     services:
       postgres:
         image: postgres:15
@@ -39,6 +39,12 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      mailpit:
+        image: axllent/mailpit:latest
+        ports:
+          - 1025:1025
+          - 8025:8025
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,7 +54,7 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          # Caches ~/.m2 automatically — subsequent runs skip
+          # Caches ~/.m2 automatically - subsequent runs skip
           # re-downloading all dependencies
           cache: maven
 
@@ -64,7 +70,7 @@ jobs:
         run: mvn clean verify
 
       - name: Upload test results
-        # Runs even if tests fail — so you can see which test failed
+        # Runs even if tests fail - so you can see which test failed
         if: always()
         uses: actions/upload-artifact@v4
         with:

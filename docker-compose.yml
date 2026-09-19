@@ -71,6 +71,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: courier-mailpit
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    healthcheck:
+      test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider",
+              "http://localhost:8025" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   courier-api:
     build:
       context: ./courier-api
@@ -113,8 +131,12 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
+      SPRING_MAIL_HOST: mailpit
+      SPRING_MAIL_PORT: 1025
     depends_on:
       courier-api:
+        condition: service_healthy
+      mailpit:
         condition: service_healthy
     healthcheck:
       test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider",

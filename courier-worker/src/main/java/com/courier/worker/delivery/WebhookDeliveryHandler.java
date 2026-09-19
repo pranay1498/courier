@@ -4,11 +4,12 @@ import com.courier.common.dto.NotificationEvent;
 import com.courier.common.enums.Channel;
 import com.courier.common.exception.DeliveryException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.*;
 
+import java.time.Duration;
 import java.util.Map;
 
 @Component
@@ -25,7 +26,24 @@ public class WebhookDeliveryHandler implements ChannelDeliveryHandler {
      * specific HTTP status codes differently (429 = back off,
      * 410 = remove endpoint, 5xx = retry, 4xx = DLQ immediately).
      */
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
+
+    /*
+     * Timeouts are the single most important webhook setting.
+     * Without them, a hung endpoint holds the consumer thread
+     * indefinitely - eventually breaching max.poll.interval.ms
+     * and triggering a consumer group rebalance.
+     *
+     * connectTimeout: how long to wait for the TCP handshake
+     * readTimeout: how long to wait for the response after connecting
+     */
+    public WebhookDeliveryHandler(RestTemplateBuilder builder) {
+        this.restTemplate = builder
+                .setConnectTimeout(Duration.ofSeconds(5))
+                .setReadTimeout(Duration.ofSeconds(10))
+                .build();
+    }
+
 
     @Override
     public Channel getChannel() {
@@ -95,15 +113,35 @@ public class WebhookDeliveryHandler implements ChannelDeliveryHandler {
                     event.getRecipient(),
                     response.getStatusCode());
 
-        } catch (RestClientException e) {
+        } catch (HttpClientErrorException e) {
             /*
-             * Network error, connection refused, timeout.
-             * Wrap in DeliveryException so the consumer's error handler
-             * knows this is a delivery failure (retriable).
+             * 4xx - the endpoint rejected the request.
+             * 429 (rate limited) and 408 (timeout) are worth retrying.
+             * Everything else (400 bad request, 404 gone, 401 unauthorized)
+             * will fail identically on retry - send straight to DLQ via
+             * IllegalArgumentException, which is in the not-retryable list.
              */
+            HttpStatusCode status = e.getStatusCode();
+            if (status.value() == 429 || status.value() == 408) {
+                throw new DeliveryException(
+                        "Webhook temporarily unavailable (" + status
+                                + ") for " + event.getRecipient(), e);
+            }
+            throw new IllegalArgumentException(
+                    "Webhook permanently rejected the request (" + status
+                            + ") for " + event.getRecipient() + " - not retrying", e);
+
+        } catch (HttpServerErrorException e) {
+            // 5xx - endpoint is broken but may recover. Retry.
             throw new DeliveryException(
-                    "HTTP call failed for URL " + event.getRecipient()
-                            + ": " + e.getMessage(), e);
+                    "Webhook endpoint error (" + e.getStatusCode()
+                            + ") for " + event.getRecipient(), e);
+
+        } catch (ResourceAccessException e) {
+            // Connection refused, DNS failure, timeout. Retry.
+            throw new DeliveryException(
+                    "Webhook unreachable: " + event.getRecipient()
+                            + " - " + e.getMessage(), e);
         }
     }
 }
