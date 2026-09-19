@@ -39,7 +39,7 @@ import static org.mockito.Mockito.*;
         partitions = 1,
         topics = {"courier.email", "courier.sms", "courier.webhook", "courier.dlq"}
 )
-@DirtiesContext
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @Import(NotificationConsumerTestConfig.class)
 @DisplayName("NotificationConsumer Integration Tests")
 class NotificationConsumerTest {
