@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @Service
@@ -156,7 +157,20 @@ public class NotificationService {
          * A future background job will re-queue PENDING notifications
          * that are older than a threshold.
          */
-        notificationProducer.publish(event);
+        UUID id = notification.getId();
+        notificationProducer.publish(event).whenComplete((result, ex) -> {
+            if(ex == null){
+                /*
+                 * Broker acknowledged (acks=all) — now it's genuinely queued.
+                 * transitionStatus only moves PENDING → QUEUED. If the worker
+                 * already consumed it and set PROCESSING, this is a no-op
+                 * rather than rolling the status backwards.
+                 */
+                notificationRepository.transitionStatus(
+                        id, NotificationStatus.PENDING, NotificationStatus.QUEUED, Instant.now());
+            }
+            // On failure: do nothing. Row stays PENDING, reconciler picks it up.
+        });
 
         log.info("Event published to Kafka. notificationId={} eventId={} channel={}",
                 notification.getId(), event.getEventId(), event.getChannel());

@@ -10,8 +10,10 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -77,4 +79,27 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
             @Param("status") NotificationStatus status,
             @Param("errorMessage") String errorMessage,
             @Param("updatedAt") Instant updatedAt);
+
+    /*
+     * Conditional status transition. Only updates if the row is still in
+     * the expected status — returns 0 if something else changed it first.
+     *
+     * This is optimistic concurrency without @Version: the WHERE clause
+     * is the guard. Used wherever two actors could race on the same row
+     * (publish callback vs reconciler, two reconciler instances).
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE Notification n SET n.status = :newStatus, n.updatedAt = :now " +
+            "WHERE n.id = :id AND n.status = :expectedStatus")
+    int transitionStatus(@Param("id") UUID id,
+                         @Param("expectedStatus") NotificationStatus expectedStatus,
+                         @Param("newStatus") NotificationStatus newStatus,
+                         @Param("now") Instant now);
+
+    List<Notification> findTop100ByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(
+            NotificationStatus status, Instant cutoff);
+
+    List<Notification> findTop100ByStatusInAndUpdatedAtBeforeOrderByUpdatedAtAsc(
+            Collection<NotificationStatus> statuses, Instant cutoff);
 }

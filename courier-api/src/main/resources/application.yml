@@ -7,6 +7,10 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:courier_user}
     password: ${SPRING_DATASOURCE_PASSWORD:courier_pass}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 10
+      connection-timeout: 5000
 
   jpa:
     hibernate:
@@ -57,7 +61,7 @@ logging:
     com.courier: DEBUG
     org.springframework.kafka: INFO
 
-# Add this block at the bottom of the existing yml
+
 springdoc:
   api-docs:
     path: /api-docs
@@ -66,3 +70,9 @@ springdoc:
     operations-sorter: method
     tags-sorter: alpha
     display-request-duration: true
+
+courier:
+  reconciliation:
+    interval-ms: 60000
+    pending-threshold: PT5M
+    drift-threshold: PT10M

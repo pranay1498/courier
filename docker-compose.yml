@@ -121,9 +121,12 @@ services:
     build:
       context: ./courier-worker
       dockerfile: Dockerfile
-    container_name: courier-worker
+    # container_name is omitted deliberately: it conflicts with
+    # deploy.replicas. Docker names replicas courier-worker-1, -2, -3.
     ports:
-      - "8081:8081"
+      - "8081-8083:8081"
+    deploy:
+      replicas: 1
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/courier
       SPRING_DATASOURCE_USERNAME: courier_user
@@ -133,6 +136,11 @@ services:
       SPRING_REDIS_PORT: 6379
       SPRING_MAIL_HOST: mailpit
       SPRING_MAIL_PORT: 1025
+      # Consumer threads PER INSTANCE. Total active consumers =
+      # replicas x concurrency, capped at the partition count (3).
+      # 1 replica x 3 = all 3 partitions consumed in parallel.
+      # Scaling to 3 replicas means setting this to 1.
+      COURIER_KAFKA_CONSUMER_CONCURRENCY: 3
     depends_on:
       courier-api:
         condition: service_healthy
@@ -151,7 +159,7 @@ services:
       dockerfile: Dockerfile
     container_name: courier-dashboard
     ports:
-      - "8082:8082"
+      - "8084:8082"   # host 8084 -> container 8082 (server.port)
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/courier
       SPRING_DATASOURCE_USERNAME: courier_user

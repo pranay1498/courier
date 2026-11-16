@@ -30,7 +30,7 @@ public class NotificationProducer {
             Channel.WEBHOOK, "courier.webhook"
     );
 
-    public void publish(NotificationEvent event) {
+    public CompletableFuture<SendResult<String, NotificationEvent>> publish(NotificationEvent event) {
         String topic = TOPIC_MAP.get(event.getChannel());
 
         if (topic == null) {
@@ -90,5 +90,6 @@ public class NotificationProducer {
                 );
             }
         });
+        return future;
     }
 }

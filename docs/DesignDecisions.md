@@ -15,22 +15,40 @@ order of these two operations determines what happens on failure.
 - Publish to Kafka first, then save to DB
 - Save to DB first, then publish to Kafka
 
-**Decision:** Save to DB first with status `PENDING`, then publish to Kafka, then
-update to `QUEUED`.
+**Decision:** Save to DB first with status `PENDING`. Transition to `QUEUED`
+only inside the publish callback, after the broker acknowledges.
 
-**Reasoning:** If Kafka publish happens first and the DB save fails, a Kafka message
-exists for a notification that has no DB record. The worker consumes the event,
-tries to find the notification by ID, finds nothing, and fails unrecoverably.
-There is no way to know what the notification was or who to deliver it to.
+**Reasoning:** If Kafka publish happens first and the DB save fails, a Kafka
+message exists for a notification that has no DB record. The worker consumes the
+event, tries to find the notification by ID, and finds nothing — there is no way
+to know what the notification was or who to deliver it to.
 
-If the DB save happens first and Kafka publish fails, the notification exists in
-DB with status `PENDING`. The notification is not lost - a background reconciliation
-job can detect all notifications stuck in `PENDING` and re-queue them. The replay
-endpoint also uses this record to re-publish. Every failure mode is recoverable.
+Saving first means the record always exists before anything else happens. If the
+publish fails, the notification sits in `PENDING` and `ReconciliationJob`
+re-publishes it after 5 minutes with a fresh `eventId`. The DLQ replay endpoint
+depends on the same guarantee.
 
-**Tradeoff accepted:** A brief window exists where the notification is `PENDING` in
-DB but not yet in Kafka. Clients polling status during this window see `PENDING`,
-which is accurate - it has been accepted but not yet queued.
+The timing of the `QUEUED` transition matters. `kafkaTemplate.send()` is
+asynchronous, so at response time the API does not know whether the broker
+accepted the message. An earlier version set `QUEUED` immediately after calling
+`publish()`. When a publish failed, the notification was marked `QUEUED` while
+not actually being in Kafka — invisible to a reconciler looking for stuck
+`PENDING` rows, and silently lost. Moving the transition into the callback fixes
+this: status reflects what is confirmed, not what was attempted.
+
+The transition uses `UPDATE ... WHERE id = ? AND status = 'PENDING'` rather than
+a blind write, because the worker can consume the message and set `PROCESSING`
+before the API's publish callback fires. Without the guard, the callback would
+roll the status backwards.
+
+**Tradeoff accepted:** The 202 response now returns `PENDING` rather than
+`QUEUED`. This is less satisfying to read but more honest — the API genuinely
+does not know yet. There is also a brief window where the notification is in
+Kafka but still `PENDING` in the DB, because the callback has not fired. A
+reconciler running in that window could re-publish a message that was in fact
+delivered successfully. The 5-minute threshold makes this effectively
+impossible, and consumer-side deduplication would not help since the
+re-published event carries a new `eventId`.
 
 ---
 

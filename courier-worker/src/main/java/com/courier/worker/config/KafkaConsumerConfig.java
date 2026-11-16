@@ -27,6 +27,8 @@ public class KafkaConsumerConfig {
 
     @Value("${spring.kafka.bootstrap-servers}")
     private String bootstrapServers;
+    @Value("${courier.kafka.consumer.concurrency:3}")
+    private int concurrency;
 
     @Bean
     public ConsumerFactory<String, NotificationEvent> consumerFactory() {
@@ -173,7 +175,7 @@ public class KafkaConsumerConfig {
          * If you set concurrency > partition count, the extra
          * threads sit idle - Kafka won't assign them any partitions.
          */
-        factory.setConcurrency(3);
+        factory.setConcurrency(concurrency);
 
         /*
          * Error handler: what happens when the @KafkaListener method throws.
