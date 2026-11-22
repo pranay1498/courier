@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,6 +29,8 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("NotificationService Unit Tests")
 class NotificationServiceTest {
+
+    private static final String CLIENT_ID = "test-client";
 
     @Mock
     private NotificationRepository notificationRepository;
@@ -63,6 +66,11 @@ class NotificationServiceTest {
                 .status(NotificationStatus.QUEUED)
                 .priority(Priority.NORMAL)
                 .build();
+
+        // publish() now returns a future (broker ack); lenient because
+        // some tests exit before reaching the publish step.
+        lenient().when(notificationProducer.publish(any()))
+                .thenReturn(CompletableFuture.completedFuture(null));
     }
 
     // ── Idempotency tests ──────────────────────────────────────────────────
@@ -75,7 +83,7 @@ class NotificationServiceTest {
                 .thenReturn(Optional.of(savedNotification));
 
         // When
-        NotificationResponse response = notificationService.submit(validRequest);
+        NotificationResponse response = notificationService.submit(validRequest, CLIENT_ID);
 
         // Then: returns existing record
         assertThat(response.getCorrelationId())
@@ -105,7 +113,7 @@ class NotificationServiceTest {
                 .thenReturn(false);
 
         // When / Then
-        assertThatThrownBy(() -> notificationService.submit(validRequest))
+        assertThatThrownBy(() -> notificationService.submit(validRequest, CLIENT_ID))
                 .isInstanceOf(RateLimitExceededException.class)
                 .hasMessageContaining("Rate limit exceeded");
 
@@ -128,7 +136,7 @@ class NotificationServiceTest {
                 .thenReturn(savedNotification);
 
         // When
-        notificationService.submit(validRequest);
+        notificationService.submit(validRequest, CLIENT_ID);
 
         /*
          * InOrder verifies that save() was called BEFORE publish().
@@ -155,7 +163,7 @@ class NotificationServiceTest {
                 .thenReturn(savedNotification);
 
         // When
-        NotificationResponse response = notificationService.submit(validRequest);
+        NotificationResponse response = notificationService.submit(validRequest, CLIENT_ID);
 
         // Then
         assertThat(response).isNotNull();
@@ -179,13 +187,13 @@ class NotificationServiceTest {
                 .thenReturn(savedNotification);
 
         // When
-        notificationService.submit(validRequest);
+        notificationService.submit(validRequest, CLIENT_ID);
         notificationService.submit(NotificationRequest.builder()
                 .correlationId("different-correlation")
                 .channel(Channel.EMAIL)
                 .recipient("other@example.com")
                 .content("Content")
-                .build());
+                .build(), CLIENT_ID);
 
         /*
          * Capture both published events and verify their eventIds differ.

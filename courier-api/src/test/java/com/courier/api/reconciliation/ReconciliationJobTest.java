@@ -82,8 +82,8 @@ class ReconciliationJobTest {
         ArgumentCaptor<NotificationEvent> captor = ArgumentCaptor.forClass(NotificationEvent.class);
         verify(producer).publish(captor.capture());
         assertThat(captor.getValue().getSourceService()).isEqualTo("courier-reconciler");
-        verify(repository).transitionStatus(stuck.getId(),
-                NotificationStatus.PENDING, NotificationStatus.QUEUED, any());
+        verify(repository).transitionStatus(eq(stuck.getId()),
+                eq(NotificationStatus.PENDING), eq(NotificationStatus.QUEUED), any());
         verify(lock).release("reconcile-pending", "token");
     }
 

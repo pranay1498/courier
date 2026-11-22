@@ -36,6 +36,7 @@ export const options = {
 
 const API = __ENV.API_URL || 'http://localhost:8080';
 const DASHBOARD = __ENV.DASHBOARD_URL || 'http://localhost:8084';
+const API_KEY = __ENV.COURIER_API_KEY || 'dev-client-key-change-me';
 
 /*
  * Fail fast if the dashboard is not reachable. Without this, an
@@ -66,7 +67,7 @@ export default function () {
       subject: 'E2E latency test',
       content: 'Measuring submission to delivery',
     }),
-    { headers: { 'Content-Type': 'application/json' }, tags: { name: 'submit' } }
+    { headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY }, tags: { name: 'submit' } }
   );
 
   if (submit.status !== 202) {
@@ -92,6 +93,7 @@ export default function () {
 
   while (Date.now() < deadline) {
     const res = http.get(`${DASHBOARD}/api/v1/dashboard/notifications/${id}`, {
+      headers: { 'X-API-Key': API_KEY },
       tags: { name: 'poll_status' },
     });
 

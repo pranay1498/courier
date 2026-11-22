@@ -9,20 +9,29 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 import org.springframework.boot.test.autoconfigure.data.redis.DataRedisTest;
 
 @DataRedisTest
 @Import(RedisConfig.class)
-@Testcontainers
 public abstract class BaseRedisTest {
 
-    @Container
-    static GenericContainer<?> redis =
+    /*
+     * Singleton container: started once per JVM, shared by every subclass.
+     *
+     * Do NOT use @Container on a static field here. Spring caches the
+     * application context across test classes, but @Container would stop
+     * the container after each class and start a new one on a different
+     * port - leaving the cached context pointing at a dead port.
+     * Testcontainers' Ryuk sidecar removes the container when the JVM exits.
+     */
+    static final GenericContainer<?> redis =
             new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
                     .withExposedPorts(6379);
+
+    static {
+        redis.start();
+    }
 
     @DynamicPropertySource
     static void redisProperties(DynamicPropertyRegistry registry) {

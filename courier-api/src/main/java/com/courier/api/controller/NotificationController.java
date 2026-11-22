@@ -15,6 +15,7 @@ import org.slf4j.MDC;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.security.Principal;
 import java.util.UUID;
 
 @RestController
@@ -62,13 +63,22 @@ public class NotificationController {
             @ApiResponse(responseCode = "400",
                     description = "Invalid request - missing required fields or validation failure"),
             @ApiResponse(responseCode = "429",
-                    description = "Rate limit exceeded - max 10 requests per channel per minute"),
+                    description = "Rate limit exceeded - see RateLimiterService for the configured limit"),
             @ApiResponse(responseCode = "500",
                     description = "Internal error - notification may not have been queued")
     })
     @PostMapping
     public ResponseEntity<NotificationResponse> submit(
-            @Valid @RequestBody NotificationRequest request) {
+            @Valid @RequestBody NotificationRequest request,
+            Principal principal) {
+
+        /*
+         * Principal is resolved by Spring from the SecurityContext that
+         * ApiKeyAuthFilter populated. getName() is the clientId. The service
+         * receives a plain String and stays free of any Spring Security
+         * coupling, which keeps it unit-testable with no security context.
+         */
+        String clientId = principal.getName();
 
         /*
          * MDC (Mapped Diagnostic Context) adds correlationId to
@@ -83,9 +93,10 @@ public class NotificationController {
          */
         MDC.put("correlationId", request.getCorrelationId());
         MDC.put("channel", request.getChannel().name());
+        MDC.put("clientId", clientId);
 
         try {
-            NotificationResponse response = notificationService.submit(request);
+            NotificationResponse response = notificationService.submit(request, clientId);
             return ResponseEntity.accepted().body(response); // HTTP 202
         } finally {
             MDC.clear();

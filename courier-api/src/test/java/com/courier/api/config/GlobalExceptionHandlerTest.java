@@ -7,6 +7,7 @@ import com.courier.common.exception.RateLimitExceededException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
@@ -24,6 +25,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * exception handlers. No Kafka, Redis, DB beans loaded.
  * Much faster than @SpringBootTest for testing HTTP behaviour.
  */
+@AutoConfigureMockMvc(addFilters = false)
 @WebMvcTest(NotificationController.class)
 @DisplayName("GlobalExceptionHandler Tests")
 class GlobalExceptionHandlerTest {
@@ -38,6 +40,7 @@ class GlobalExceptionHandlerTest {
     @DisplayName("Should return 400 when required fields are missing")
     void shouldReturn400ForMissingRequiredFields() throws Exception {
         mockMvc.perform(post("/api/v1/notifications")
+                        .principal(() -> "test-client")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                             {
@@ -55,11 +58,12 @@ class GlobalExceptionHandlerTest {
     @Test
     @DisplayName("Should return 429 with Retry-After header when rate limited")
     void shouldReturn429WithRetryAfterHeader() throws Exception {
-        when(notificationService.submit(any()))
+        when(notificationService.submit(any(), any()))
                 .thenThrow(new RateLimitExceededException(
                         "Rate limit exceeded for channel: EMAIL"));
 
         mockMvc.perform(post("/api/v1/notifications")
+                        .principal(() -> "test-client")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                             {
@@ -89,10 +93,11 @@ class GlobalExceptionHandlerTest {
     @Test
     @DisplayName("Should return 500 with generic message for unhandled exceptions")
     void shouldReturn500WithGenericMessageForUnhandledException() throws Exception {
-        when(notificationService.submit(any()))
+        when(notificationService.submit(any(), any()))
                 .thenThrow(new RuntimeException("DB connection pool exhausted"));
 
         mockMvc.perform(post("/api/v1/notifications")
+                        .principal(() -> "test-client")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                             {
@@ -117,6 +122,7 @@ class GlobalExceptionHandlerTest {
     @DisplayName("Should return 400 with field-level errors for validation failure")
     void shouldReturn400WithFieldErrors() throws Exception {
         mockMvc.perform(post("/api/v1/notifications")
+                        .principal(() -> "test-client")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                             {

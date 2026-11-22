@@ -49,6 +49,7 @@ export const options = {
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
+const API_KEY = __ENV.COURIER_API_KEY || 'dev-client-key-change-me';
 
 export default function () {
   /*
@@ -70,7 +71,7 @@ export default function () {
   });
 
   const res = http.post(`${BASE_URL}/api/v1/notifications`, payload, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
     tags: { name: 'submit' },
   });
 

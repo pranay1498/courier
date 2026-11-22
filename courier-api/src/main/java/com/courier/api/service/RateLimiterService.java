@@ -1,8 +1,8 @@
 package com.courier.api.service;
 
 import com.courier.common.enums.Channel;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
@@ -10,35 +10,39 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class RateLimiterService {
 
     private final RedisTemplate<String, String> redisTemplate;
     private final RedisScript<Long> rateLimitScript;
+    private final int maxRequests;
 
     /*
-     * Window: 1 minute (60,000 milliseconds)
-     * Limit: 10 notifications per channel per minute per user
+     * Window: 1 minute (60,000 milliseconds).
+     * Limit: configurable per authenticated client, per channel, per window
+     * (courier.rate-limit.max-requests, default 1,000).
      *
-     * These are deliberately conservative for a notification system.
-     * A legitimate use case rarely needs more than 10 emails/min.
-     * Adjust per channel in production - SMS limits are often stricter
-     * than email due to carrier restrictions.
+     * Make it configurable rather than a constant so tests can use a tiny
+     * limit and deployments can tune it. Adjust per channel in production -
+     * SMS limits are often stricter than email due to carrier restrictions.
      */
-    private static final long WINDOW_MS    = 60_000L;
-    private static final int  MAX_REQUESTS = 10;
+    private static final long WINDOW_MS = 60_000L;
+
+    public RateLimiterService(
+            RedisTemplate<String, String> redisTemplate,
+            RedisScript<Long> rateLimitScript,
+            @Value("${courier.rate-limit.max-requests:1000}") int maxRequests) {
+        this.redisTemplate = redisTemplate;
+        this.rateLimitScript = rateLimitScript;
+        this.maxRequests = maxRequests;
+    }
 
     /*
      * Key format: "ratelimit:{identifier}:{channel}"
      *
-     * Using correlationId prefix as the identifier here.
-     * In a real system you'd use userId or tenantId - a stable
-     * identifier that groups all requests from the same client.
-     * We're using correlationId's prefix as a proxy for now.
-     *
-     * Each channel has its own bucket - exhausting your email
-     * limit does not affect your SMS limit.
+     * identifier is the authenticated clientId (from the API key), so all
+     * requests from one client share a bucket. Each channel has its own
+     * bucket - exhausting your email limit does not affect your SMS limit.
      */
     public boolean isAllowed(String identifier, Channel channel) {
         String key = "ratelimit:" + identifier + ":" + channel.name();
@@ -50,7 +54,7 @@ public class RateLimiterService {
                     List.of(key),             // KEYS
                     String.valueOf(now),       // ARGV[1] - current timestamp
                     String.valueOf(WINDOW_MS), // ARGV[2] - window size
-                    String.valueOf(MAX_REQUESTS) // ARGV[3] - max requests
+                    String.valueOf(maxRequests) // ARGV[3] - max requests
             );
 
             boolean allowed = Long.valueOf(1L).equals(result);

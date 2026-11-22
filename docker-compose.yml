@@ -103,6 +103,8 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
+      COURIER_CLIENT_KEY: ${COURIER_CLIENT_KEY:-dev-client-key-change-me}
+      COURIER_ADMIN_KEY: ${COURIER_ADMIN_KEY:-dev-admin-key-change-me}
     depends_on:
       kafka:
         condition: service_healthy
@@ -166,6 +168,8 @@ services:
       SPRING_DATASOURCE_PASSWORD: courier_pass
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
+      COURIER_CLIENT_KEY: ${COURIER_CLIENT_KEY:-dev-client-key-change-me}
+      COURIER_ADMIN_KEY: ${COURIER_ADMIN_KEY:-dev-admin-key-change-me}
     depends_on:
       postgres:
         condition: service_healthy

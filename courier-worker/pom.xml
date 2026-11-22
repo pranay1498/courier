@@ -80,6 +80,12 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Real Postgres for the consumer integration test -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
 
         <!-- Awaitility - clean async assertions without Thread.sleep() -->
         <dependency>

@@ -72,6 +72,16 @@ springdoc:
     display-request-duration: true
 
 courier:
+  security:
+    clients:
+      # Dev defaults. Override with env vars in any shared environment.
+      # Production would store hashed keys per client in the DB instead.
+      - key: ${COURIER_CLIENT_KEY:dev-client-key-change-me}
+        clientId: dev-client
+        role: CLIENT
+      - key: ${COURIER_ADMIN_KEY:dev-admin-key-change-me}
+        clientId: dev-admin
+        role: ADMIN
   reconciliation:
     interval-ms: 60000
     pending-threshold: PT5M

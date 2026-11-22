@@ -31,7 +31,7 @@ class RateLimiterServiceTest extends BaseRedisTest {
 
     @BeforeEach
     void setUp() {
-        rateLimiterService = new RateLimiterService(redisTemplate, rateLimitScript);
+        rateLimiterService = new RateLimiterService(redisTemplate, rateLimitScript, 10);
     }
 
     @Test

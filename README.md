@@ -20,6 +20,7 @@ Courier is a distributed multi-channel notification delivery platform built with
 | Testcontainers | 1.19.3 | Redis integration tests against real Redis                                                       |
 | Mailpit | latest | Local SMTP capture - view delivered mail at :8025                                                |
 | k6 | - | Load testing - API throughput and end-to-end delivery latency                                   |
+| Spring Security | 6.2.0 | API key authentication, role-based path authorization                            |
 
 
 ## Getting Started
@@ -43,6 +44,7 @@ Wait ~30 seconds for all services to start, then send your first notification:
 ```bash
 curl -X POST http://localhost:8080/api/v1/notifications \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: dev-client-key-change-me" \
   -d '{
     "correlationId": "my-first-notification",
     "channel": "WEBHOOK",
@@ -57,6 +59,54 @@ Swagger UI available at:
 
 The dashboard listens on 8082 inside its container but is published on host port
 8084, because courier-worker reserves the host range 8081-8083 for its replicas.
+
+## Authentication
+
+Every `/api/v1/**` endpoint on both services requires an API key in the
+`X-API-Key` header. Actuator health, Swagger UI and the OpenAPI spec stay open
+so the project is explorable and Docker healthchecks keep working.
+
+| Role | Can reach | Dev default key |
+|---|---|---|
+| `CLIENT` | `/api/v1/notifications/**`, `/api/v1/dashboard/**` | `dev-client-key-change-me` |
+| `ADMIN` | the above plus `/api/v1/admin/**` | `dev-admin-key-change-me` |
+
+Override the defaults with environment variables:
+
+```bash
+COURIER_CLIENT_KEY=... COURIER_ADMIN_KEY=... docker-compose up -d
+```
+
+Responses distinguish the two failure modes. A missing or unrecognised key is
+**401 Unauthorized** - the server does not know who you are. A valid `CLIENT`
+key hitting an admin endpoint is **403 Forbidden** - the server knows exactly
+who you are and the answer is no. Retrying a 403 with the same key is futile,
+and the status code says so.
+
+Keys are compared with `MessageDigest.isEqual` rather than `String.equals`.
+`equals` returns on the first differing byte, so response time leaks how many
+leading characters of a guess were correct - enough to recover a key one
+character at a time.
+
+The authorization rules end in `denyAll()`, not `permitAll()`. An endpoint
+added later and not matched by an earlier rule is closed by default: a
+forgotten rule becomes a 403 rather than an open door.
+
+**What production would do differently.** Keys here come from configuration,
+which is appropriate for a single-tenant deployment. A multi-tenant system
+would store an Argon2 or bcrypt hash per client in the database, support
+rotation with overlapping validity windows, and never retain the plaintext key
+after issuance.
+
+### Rate limiting
+
+The rate limiter buckets on the authenticated `clientId`. It previously keyed
+on `correlationId`, which is unique per request - so every request opened a
+fresh bucket and the limiter never fired. Load testing made this visible:
+**zero rejections across 105,589 requests at 800 req/s** against a configured
+limit. A rate limit bucket has to be keyed on something stable across a
+caller's requests, and before authentication existed there was nothing stable
+to key on.
 
 ## Delivery Channels
 

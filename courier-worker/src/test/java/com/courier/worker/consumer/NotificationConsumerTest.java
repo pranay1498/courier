@@ -16,6 +16,12 @@ import org.springframework.context.annotation.Import;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.utility.MountableFile;
+
+import java.nio.file.Path;
 
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -43,6 +49,37 @@ import static org.mockito.Mockito.*;
 @Import(NotificationConsumerTestConfig.class)
 @DisplayName("NotificationConsumer Integration Tests")
 class NotificationConsumerTest {
+
+    /*
+     * Real Postgres, started once for the whole class (singleton pattern -
+     * @DirtiesContext rebuilds the Spring context after every test method,
+     * so a per-context container would be restarted each time).
+     *
+     * The schema comes from the repo's init.sql - the same file docker-compose
+     * mounts - so there is one source of truth and ddl-auto=validate still
+     * checks the entities against it. No dependency on the compose stack.
+     * Ryuk removes the container when the JVM exits.
+     */
+    static final PostgreSQLContainer<?> postgres =
+            new PostgreSQLContainer<>("postgres:15")
+                    .withDatabaseName("courier")
+                    .withUsername("courier_user")
+                    .withPassword("courier_pass")
+                    .withCopyFileToContainer(
+                            MountableFile.forHostPath(
+                                    Path.of("..", "init.sql").toAbsolutePath().normalize()),
+                            "/docker-entrypoint-initdb.d/init.sql");
+
+    static {
+        postgres.start();
+    }
+
+    @DynamicPropertySource
+    static void datasourceProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+    }
 
     @Autowired
     private KafkaTemplate<String, NotificationEvent> kafkaTemplate;

@@ -41,7 +41,7 @@ public class NotificationService {
      * complexity. Not worth it for this system at this scale.
      */
     @Transactional
-    public NotificationResponse submit(NotificationRequest request) {
+    public NotificationResponse submit(NotificationRequest request, String clientId) {
 
         log.info("Submitting notification. correlationId={} channel={}",
                 request.getCorrelationId(), request.getChannel());
@@ -67,10 +67,11 @@ public class NotificationService {
                             request.getCorrelationId(), existing.getId());
                     return NotificationResponse.from(existing);
                 })
-                .orElseGet(() -> processNewNotification(request));
+                .orElseGet(() -> processNewNotification(request, clientId));
     }
 
-    private NotificationResponse processNewNotification(NotificationRequest request) {
+    private NotificationResponse processNewNotification(NotificationRequest request,
+                                                        String clientId) {
 
         // ── Step 2: Rate limit check ───────────────────────────────────────
         /*
@@ -81,11 +82,20 @@ public class NotificationService {
          * Checked BEFORE saving to DB - no record created for
          * rate-limited requests.
          */
+        /*
+         * Rate limit on the authenticated client, not correlationId.
+         *
+         * correlationId is unique per request, so it produced a fresh
+         * bucket every time and the limiter never fired - load testing
+         * recorded zero rejections across 105,589 requests at 800 req/s
+         * against a configured limit. clientId is stable across a
+         * caller's requests, which is what a rate limit bucket must be.
+         */
         if (!rateLimiterService.isAllowed(
-                request.getCorrelationId(), request.getChannel())) {
+                clientId, request.getChannel())) {
             throw new RateLimitExceededException(
                     "Rate limit exceeded for channel: " + request.getChannel() +
-                            ". Max 10 requests per minute per channel.");
+                            ".");
         }
 
         // ── Step 3: Persist with status PENDING ───────────────────────────

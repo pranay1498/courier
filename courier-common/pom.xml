@@ -35,6 +35,21 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
+        <!-- Spring Security (optional: only HTTP modules pull it in) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Servlet API for ApiKeyAuthFilter. Compile-time only: the API and
+             dashboard get it at runtime from embedded Tomcat, and the worker
+             never loads the security classes. -->
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <!--
