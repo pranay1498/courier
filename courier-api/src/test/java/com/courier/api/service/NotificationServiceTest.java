@@ -1,6 +1,5 @@
 package com.courier.api.service;
 
-import com.courier.api.kafka.NotificationProducer;
 import com.courier.common.dto.NotificationRequest;
 import com.courier.common.dto.NotificationResponse;
 import com.courier.common.entity.Notification;
@@ -20,10 +19,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -39,7 +38,7 @@ class NotificationServiceTest {
     private RateLimiterService rateLimiterService;
 
     @Mock
-    private NotificationProducer notificationProducer;
+    private EventDispatcher eventDispatcher;
 
     @InjectMocks
     private NotificationService notificationService;
@@ -66,11 +65,6 @@ class NotificationServiceTest {
                 .status(NotificationStatus.QUEUED)
                 .priority(Priority.NORMAL)
                 .build();
-
-        // publish() now returns a future (broker ack); lenient because
-        // some tests exit before reaching the publish step.
-        lenient().when(notificationProducer.publish(any()))
-                .thenReturn(CompletableFuture.completedFuture(null));
     }
 
     // ── Idempotency tests ──────────────────────────────────────────────────
@@ -91,8 +85,8 @@ class NotificationServiceTest {
         assertThat(response.getStatus())
                 .isEqualTo(NotificationStatus.QUEUED);
 
-        // Critical: Kafka producer must NOT be called for duplicates
-        verify(notificationProducer, never()).publish(any());
+        // Critical: nothing is dispatched to Kafka for duplicates
+        verify(eventDispatcher, never()).dispatchAfterCommit(any(), any());
 
         // Critical: no new DB record created
         verify(notificationRepository, never()).save(any());
@@ -119,7 +113,7 @@ class NotificationServiceTest {
 
         // No DB save, no Kafka publish
         verify(notificationRepository, never()).save(any());
-        verify(notificationProducer, never()).publish(any());
+        verify(eventDispatcher, never()).dispatchAfterCommit(any(), any());
     }
 
     // ── Save-before-publish ordering test ─────────────────────────────────
@@ -144,17 +138,50 @@ class NotificationServiceTest {
          * if publish happens first and DB save fails, we have a Kafka
          * message with no corresponding DB record.
          */
-        InOrder inOrder = inOrder(notificationRepository, notificationProducer);
+        InOrder inOrder = inOrder(notificationRepository, eventDispatcher);
         inOrder.verify(notificationRepository).save(any(Notification.class));
-        inOrder.verify(notificationProducer).publish(any());
+        inOrder.verify(eventDispatcher).dispatchAfterCommit(any(), any());
     }
 
     // ── Successful submission test ─────────────────────────────────────────
 
     @Test
-    @DisplayName("Should return QUEUED status after successful submission")
-    void shouldReturnQueuedStatusAfterSubmission() {
-        // Given
+    @DisplayName("Should return PENDING and save exactly once - QUEUED only comes from the broker ack")
+    void shouldReturnPendingStatusAfterSubmission() {
+        // Given: the first (and only) save returns a PENDING row
+        Notification pending = Notification.builder()
+                .id(UUID.randomUUID())
+                .correlationId("test-correlation-001")
+                .channel(Channel.EMAIL)
+                .recipient("test@example.com")
+                .status(NotificationStatus.PENDING)
+                .priority(Priority.NORMAL)
+                .build();
+        when(notificationRepository.findByCorrelationId(any()))
+                .thenReturn(Optional.empty());
+        when(rateLimiterService.isAllowed(any(), any()))
+                .thenReturn(true);
+        when(notificationRepository.save(any()))
+                .thenReturn(pending);
+
+        // When
+        NotificationResponse response = notificationService.submit(validRequest, CLIENT_ID);
+
+        // Then
+        assertThat(response).isNotNull();
+        assertThat(response.getCorrelationId()).isEqualTo("test-correlation-001");
+        assertThat(response.getChannel()).isEqualTo(Channel.EMAIL);
+        assertThat(response.getStatus()).isEqualTo(NotificationStatus.PENDING);
+
+        // Regression guard: no second save() marking the row QUEUED before the ack
+        verify(notificationRepository, times(1)).save(any());
+    }
+
+    // ── Hand-off to the dispatcher ─────────────────────────────────────────
+
+    @Test
+    @DisplayName("Should hand the dispatcher an event for the persisted notification")
+    void shouldDispatchEventForPersistedNotification() {
         when(notificationRepository.findByCorrelationId(any()))
                 .thenReturn(Optional.empty());
         when(rateLimiterService.isAllowed(any(), any()))
@@ -162,15 +189,17 @@ class NotificationServiceTest {
         when(notificationRepository.save(any()))
                 .thenReturn(savedNotification);
 
-        // When
-        NotificationResponse response = notificationService.submit(validRequest, CLIENT_ID);
+        notificationService.submit(validRequest, CLIENT_ID);
 
-        // Then
-        assertThat(response).isNotNull();
-        assertThat(response.getCorrelationId())
-                .isEqualTo("test-correlation-001");
-        assertThat(response.getChannel())
-                .isEqualTo(Channel.EMAIL);
+        var eventCaptor = org.mockito.ArgumentCaptor
+                .forClass(com.courier.common.dto.NotificationEvent.class);
+        var idCaptor = org.mockito.ArgumentCaptor.forClass(UUID.class);
+        verify(eventDispatcher).dispatchAfterCommit(eventCaptor.capture(), idCaptor.capture());
+
+        assertThat(idCaptor.getValue()).isEqualTo(savedNotification.getId());
+        assertThat(eventCaptor.getValue().getNotificationId()).isEqualTo(savedNotification.getId());
+        assertThat(eventCaptor.getValue().getSourceService()).isEqualTo("courier-api");
+        assertThat(eventCaptor.getValue().getChannel()).isEqualTo(Channel.EMAIL);
     }
 
     // ── Event building test ────────────────────────────────────────────────
@@ -203,7 +232,7 @@ class NotificationServiceTest {
          */
         var captor = org.mockito.ArgumentCaptor
                 .forClass(com.courier.common.dto.NotificationEvent.class);
-        verify(notificationProducer, times(2)).publish(captor.capture());
+        verify(eventDispatcher, times(2)).dispatchAfterCommit(captor.capture(), any());
 
         var events = captor.getAllValues();
         assertThat(events.get(0).getEventId())

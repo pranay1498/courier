@@ -9,6 +9,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -68,6 +69,25 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.NOT_FOUND)
                 .body(errorBody("NOT_FOUND", ex.getMessage()));
+    }
+
+    /*
+     * A request for a path nothing serves (a missing static resource such as
+     * /favicon.ico, or a mistyped /swagger-ui/foo on a permitted path).
+     *
+     * Spring 6.1 raises NoResourceFoundException for this. Without a handler it
+     * fell into the catch-all below and became a 500 with an error log - a
+     * client mistake reported as a server fault. It is a plain 404.
+     * Logged at debug: scanners and browsers probing paths are not noteworthy.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNoResource(
+            NoResourceFoundException ex) {
+
+        log.debug("No resource found: {}", ex.getResourcePath());
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(errorBody("NOT_FOUND", "No such resource"));
     }
 
     /*

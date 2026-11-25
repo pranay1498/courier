@@ -30,18 +30,35 @@ depends on the same guarantee.
 
 The timing of the `QUEUED` transition matters. `kafkaTemplate.send()` is
 asynchronous, so at response time the API does not know whether the broker
-accepted the message. An earlier version set `QUEUED` immediately after calling
-`publish()`. When a publish failed, the notification was marked `QUEUED` while
-not actually being in Kafka — invisible to a reconciler looking for stuck
-`PENDING` rows, and silently lost. Moving the transition into the callback fixes
-this: status reflects what is confirmed, not what was attempted.
+accepted the message. Setting `QUEUED` right after calling `publish()` would mark
+a notification `QUEUED` even when the publish failed - invisible to a reconciler
+looking for stuck `PENDING` rows, and silently lost. So the transition happens in
+the broker-ack callback: status reflects what is confirmed, not what was attempted.
 
 The transition uses `UPDATE ... WHERE id = ? AND status = 'PENDING'` rather than
 a blind write, because the worker can consume the message and set `PROCESSING`
 before the API's publish callback fires. Without the guard, the callback would
 roll the status backwards.
 
-**Tradeoff accepted:** The 202 response now returns `PENDING` rather than
+The publish itself is deferred until after the database transaction commits
+(`TransactionSynchronization.afterCommit`). Publishing inside the transaction
+lets two things go wrong: the worker can consume the event before its row is
+visible, and the broker-ack callback can run its `PENDING -> QUEUED` update
+against a row that has not committed yet, matching zero rows and leaving the
+notification `PENDING` until the reconciler re-publishes it — a duplicate
+delivery. If the publish then fails, the committed `PENDING` row is exactly what
+the reconciler looks for.
+
+Both the submit path and the admin replay path hand events to a single
+`EventDispatcher`, which owns these rules (publish after commit, `QUEUED` only on
+the broker ack, failure leaves the row `PENDING`), so they cannot drift apart.
+
+**Alternatives considered:** an outbox table written in the same transaction and
+relayed to Kafka (strongest guarantee, more moving parts), and
+`@TransactionalEventListener(AFTER_COMMIT)` (equivalent to the approach above, less
+explicit).
+
+**Tradeoff accepted:** The 202 response returns `PENDING` rather than
 `QUEUED`. This is less satisfying to read but more honest — the API genuinely
 does not know yet. There is also a brief window where the notification is in
 Kafka but still `PENDING` in the DB, because the callback has not fired. A
@@ -146,6 +163,13 @@ eliminating this gap.
 The Lua script is loaded once at startup (as a Spring `@Bean`) and cached by Redis
 as a SHA1 hash. All subsequent calls use `EVALSHA` - faster than sending the full
 script on every request.
+
+What the limiter keys on matters as much as how it counts. The key must be stable
+across a caller's requests, so a per-request value such as `correlationId` is
+unusable: every request would open a fresh, empty bucket and the limiter could never
+fire. The key is the authenticated `clientId` (see Decision 10). The limit itself is configuration
+(`courier.rate-limit.max-requests`, default 1,000 per client per channel per
+minute), so tests can use a tiny limit and load tests can raise it.
 
 **Tradeoff accepted:** If Redis is unavailable, the rate limiter fails open -
 requests are allowed through. This is deliberate: blocking all notifications because
@@ -260,12 +284,18 @@ key, so the worker processes it as a fresh event.
 
 If the original `eventId` were reused and its dedup key still existed in Redis
 (within the 24-hour TTL), the worker would detect it as a duplicate and skip it
-silently. The notification would appear to be replayed (status reset to QUEUED)
+silently. The notification would appear to be replayed (moving on to QUEUED)
 but would never actually be delivered.
 
 The replay also resets `status` to `PENDING`, clears `errorMessage`, resets
 `retryCount` to 0, and tags `sourceService` as `"courier-api-replay"` so replay
 events are distinguishable in logs and metrics from original events.
+
+Replay publishes through the same `EventDispatcher` as a normal submit: the event
+is sent after the transaction commits, and the row moves from `PENDING` to `QUEUED`
+only when the broker acknowledges it. A failed publish therefore leaves the row
+`PENDING` and the reconciler retries it, rather than looking successful to the
+operator.
 
 **Tradeoff accepted:** Each replay creates a new `eventId`, so the delivery attempt
 history shows attempts from both the original delivery and the replay under the same
@@ -287,3 +317,61 @@ throw `DeliveryException` for transient failures (retry) and `IllegalArgumentExc
 for permanent ones (straight to DLQ). This keeps the classification decision in the
 handler that has the context to make it, while the retry mechanics stay in the Kafka
 error handler.
+
+---
+
+## 10. API-Key Authentication
+
+**Problem:** The API accepts notification submissions and exposes admin operations
+(DLQ replay). Callers must be identified - for authorization, and because the rate
+limiter needs a stable per-caller identifier (see Decision 4) - and admin
+operations must be restricted to a stronger credential.
+
+**Options considered:**
+- No authentication
+- Static API keys in a request header
+- OAuth2 client-credentials with short-lived JWTs
+- HMAC-signed requests
+- Mutual TLS
+
+**Decision:** Static API keys in an `X-API-Key` header, two roles (`CLIENT`,
+`ADMIN`), enforced by a stateless Spring Security filter chain.
+
+**Reasoning:** Courier's callers are backend services, not people, in a single-tenant
+deployment. API keys give each caller an identity with the fewest moving parts - no
+auth server, no token endpoint, no certificate authority. The identity is what the
+rate limiter and audit logs need; the credential type is secondary to that.
+
+Several choices make the simple mechanism hold up:
+
+- **Authenticate and authorize are separate.** `ApiKeyAuthFilter` only establishes
+  who the caller is. Which paths that caller may reach lives in `SecurityConfig`, so
+  a new endpoint is covered by the authorization rules without touching the filter.
+- **The principal is the `clientId`, never the key.** Rate limiting, logging and the
+  MDC all see a stable identifier, and the secret goes no further than the filter.
+- **Constant-time comparison.** Keys are compared with `MessageDigest.isEqual`.
+  `String.equals` returns at the first differing byte, so response time leaks how
+  many leading characters of a guess were right.
+- **401 versus 403.** An unknown or missing key is 401 (who are you); a valid
+  `CLIENT` key on an admin endpoint is 403 (known, and not permitted). Retrying a 403
+  with the same key is futile and the status code says so.
+- **Fail closed.** The rules end in `denyAll()`. An endpoint added later and not
+  matched by an earlier rule is closed by default.
+- **CSRF disabled, deliberately.** CSRF defends against a browser silently attaching
+  an ambient credential (a cookie). There are no cookies or sessions here - every
+  request carries its own header - so there is nothing to ride on.
+- **Unsafe configuration cannot reach production.** The dev defaults
+  (`...-change-me`) are public in the repository. With the `prod` profile active,
+  startup aborts if any key is a placeholder, shorter than 24 characters, blank or
+  duplicated, or if a role is mistyped. Error messages name the client, never the key.
+
+**Tradeoff accepted:** Keys are long-lived with no expiry, live in configuration in
+plaintext, and rotating one means a redeploy. There are no per-endpoint scopes. The
+startup check only enforces under the `prod` profile - a deployment that forgets to
+set it gets a logged warning, not a refusal. Refusing unless a `dev` profile is
+active would be safer, but it forces every local run and test to opt in.
+
+The upgrade path is OAuth2 client-credentials with short-lived JWTs: Courier becomes
+a resource server, the filter is replaced by signature validation, and `clientId`
+comes from the token's `client_id` claim. The controller and rate limiter do not
+change, because they only ever saw the `clientId`.

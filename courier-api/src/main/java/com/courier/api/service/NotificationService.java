@@ -1,6 +1,5 @@
 package com.courier.api.service;
 
-import com.courier.api.kafka.NotificationProducer;
 import com.courier.common.dto.NotificationEvent;
 import com.courier.common.dto.NotificationRequest;
 import com.courier.common.dto.NotificationResponse;
@@ -14,7 +13,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.UUID;
 
 @Service
@@ -24,21 +22,21 @@ public class NotificationService {
 
     private final NotificationRepository   notificationRepository;
     private final RateLimiterService       rateLimiterService;
-    private final NotificationProducer     notificationProducer;
+    private final EventDispatcher          eventDispatcher;
 
     /*
-     * @Transactional wraps the DB operations in a single transaction.
-     * If anything throws after the first save() but before the second save(),
-     * both saves roll back - the DB stays clean.
+     * @Transactional wraps the DB write in a transaction: if anything throws
+     * before commit, the row is rolled back and the DB stays clean.
      *
-     * Important: Kafka publish is NOT transactional.
-     * If we publish to Kafka and then the second DB save fails,
-     * the Kafka message is already in the broker - it won't roll back.
-     * This is an acceptable tradeoff: the worker will process the event,
-     * update the status to QUEUED in DB, and everything self-heals.
+     * The Kafka publish is NOT part of the transaction. It is deliberately
+     * deferred until AFTER the commit (see EventDispatcher), so that:
+     *   - the worker can never consume an event whose row isn't visible yet
+     *   - the broker-ack callback's PENDING -> QUEUED update can actually
+     *     see the committed row
      *
-     * The alternative (Kafka transactions + outbox pattern) adds significant
-     * complexity. Not worth it for this system at this scale.
+     * If the publish then fails, the row stays PENDING and the reconciler
+     * re-publishes it. The alternative (Kafka transactions + outbox pattern)
+     * adds significant complexity - not worth it at this scale.
      */
     @Transactional
     public NotificationResponse submit(NotificationRequest request, String clientId) {
@@ -74,14 +72,8 @@ public class NotificationService {
                                                         String clientId) {
 
         // ── Step 2: Rate limit check ───────────────────────────────────────
-        /*
-         * Use correlationId as the rate limit identifier.
-         * In production you'd extract a userId or tenantId from
-         * a JWT token or API key in the request headers.
-         *
-         * Checked BEFORE saving to DB - no record created for
-         * rate-limited requests.
-         */
+        // Checked BEFORE saving to DB - no record is created for
+        // rate-limited requests.
         /*
          * Rate limit on the authenticated client, not correlationId.
          *
@@ -159,47 +151,15 @@ public class NotificationService {
                 .sourceService("courier-api")
                 .build();
 
-        // ── Step 5: Publish to Kafka ───────────────────────────────────────
+        // ── Step 5: Publish to Kafka (after commit) ────────────────────────
         /*
-         * Async send - does not block the current thread.
-         * The producer's whenComplete callback handles success/failure logging.
-         * If publish fails, the notification stays PENDING in DB.
-         * A future background job will re-queue PENDING notifications
-         * that are older than a threshold.
+         * The row stays PENDING here. It becomes QUEUED only when the broker
+         * acknowledges the message (see EventDispatcher) - status
+         * reflects what is confirmed, not what was attempted. The response
+         * therefore returns PENDING: accepted and persisted, not yet
+         * confirmed in the queue. Clients poll /status for the rest.
          */
-        UUID id = notification.getId();
-        notificationProducer.publish(event).whenComplete((result, ex) -> {
-            if(ex == null){
-                /*
-                 * Broker acknowledged (acks=all) — now it's genuinely queued.
-                 * transitionStatus only moves PENDING → QUEUED. If the worker
-                 * already consumed it and set PROCESSING, this is a no-op
-                 * rather than rolling the status backwards.
-                 */
-                notificationRepository.transitionStatus(
-                        id, NotificationStatus.PENDING, NotificationStatus.QUEUED, Instant.now());
-            }
-            // On failure: do nothing. Row stays PENDING, reconciler picks it up.
-        });
-
-        log.info("Event published to Kafka. notificationId={} eventId={} channel={}",
-                notification.getId(), event.getEventId(), event.getChannel());
-
-        // ── Step 6: Update status to QUEUED ───────────────────────────────
-        /*
-         * Status moves from PENDING → QUEUED after successful publish.
-         * "QUEUED" means: in Kafka, not yet picked up by the worker.
-         *
-         * Note: if the Kafka publish fails asynchronously (the future
-         * completes with an exception), this QUEUED update has already
-         * happened. This is the transactional gap mentioned in @Transactional
-         * comment above. Acceptable tradeoff.
-         */
-        notification.setStatus(NotificationStatus.QUEUED);
-        notification = notificationRepository.save(notification);
-
-        log.info("Notification status updated to QUEUED. notificationId={}",
-                notification.getId());
+        eventDispatcher.dispatchAfterCommit(event, notification.getId());
 
         return NotificationResponse.from(notification);
     }

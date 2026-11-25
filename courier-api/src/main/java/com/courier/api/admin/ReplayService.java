@@ -1,6 +1,6 @@
 package com.courier.api.admin;
 
-import com.courier.api.kafka.NotificationProducer;
+import com.courier.api.service.EventDispatcher;
 import com.courier.common.dto.NotificationEvent;
 import com.courier.common.entity.Notification;
 import com.courier.common.enums.NotificationStatus;
@@ -20,7 +20,7 @@ import java.util.UUID;
 public class ReplayService {
 
     private final NotificationRepository            notificationRepository;
-    private final NotificationProducer              notificationProducer;
+    private final EventDispatcher                   eventDispatcher;
     private final RedisTemplate<String, String>     redisTemplate;
 
     @Transactional
@@ -98,13 +98,15 @@ public class ReplayService {
                 .sourceService("courier-api-replay")    // distinguishes replay events in logs
                 .build();
 
-        notificationProducer.publish(event);
+        /*
+         * Same path as a normal submit: publish after this transaction commits,
+         * and move PENDING -> QUEUED only when the broker acks. If the publish
+         * fails the row stays PENDING and the reconciler picks it up - the
+         * replay is never silently marked QUEUED while not actually in Kafka.
+         */
+        eventDispatcher.dispatchAfterCommit(event, notification.getId());
 
-        // ── Step 5: Update status to QUEUED ───────────────────────────────
-        notification.setStatus(NotificationStatus.QUEUED);
-        notificationRepository.save(notification);
-
-        log.info("Notification queued for replay. notificationId={} newEventId={}",
+        log.info("Notification handed off for replay. notificationId={} newEventId={}",
                 notificationId, event.getEventId());
     }
 }

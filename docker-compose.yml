@@ -105,6 +105,10 @@ services:
       SPRING_REDIS_PORT: 6379
       COURIER_CLIENT_KEY: ${COURIER_CLIENT_KEY:-dev-client-key-change-me}
       COURIER_ADMIN_KEY: ${COURIER_ADMIN_KEY:-dev-admin-key-change-me}
+      # Per-client, per-channel requests allowed per minute. Production default
+      # is 1000. Raise it for load tests, e.g.
+      #   COURIER_RATE_LIMIT_MAX_REQUESTS=10000000 docker-compose up -d courier-api
+      COURIER_RATE_LIMIT_MAX_REQUESTS: ${COURIER_RATE_LIMIT_MAX_REQUESTS:-1000}
     depends_on:
       kafka:
         condition: service_healthy

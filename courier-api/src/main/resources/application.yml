@@ -82,6 +82,10 @@ courier:
       - key: ${COURIER_ADMIN_KEY:dev-admin-key-change-me}
         clientId: dev-admin
         role: ADMIN
+  rate-limit:
+    # Requests per client, per channel, per rolling minute.
+    # Override with COURIER_RATE_LIMIT_MAX_REQUESTS (e.g. for load tests).
+    max-requests: 1000
   reconciliation:
     interval-ms: 60000
     pending-threshold: PT5M

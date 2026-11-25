@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -30,6 +31,16 @@ import java.util.Map;
 public class SecurityConfig {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /*
+     * Aborts startup in the "prod" profile if keys are placeholders, too short,
+     * missing or duplicated; warns in every other profile.
+     */
+    @Bean
+    public ApiKeyStartupValidator apiKeyStartupValidator(ApiKeyProperties properties,
+                                                         Environment environment) {
+        return new ApiKeyStartupValidator(properties, environment);
+    }
 
     @Bean
     public ApiKeyAuthFilter apiKeyAuthFilter(ApiKeyProperties properties) {

@@ -92,6 +92,15 @@ The authorization rules end in `denyAll()`, not `permitAll()`. An endpoint
 added later and not matched by an earlier rule is closed by default: a
 forgotten rule becomes a 403 rather than an open door.
 
+In Swagger UI, click **Authorize** and paste a key (`dev-client-key-change-me` locally)
+and "Try it out" sends it on every request.
+
+**Unsafe keys cannot reach production.** The dev defaults are public in this
+repository. With `SPRING_PROFILES_ACTIVE=prod`, startup aborts if any key is a
+placeholder, shorter than 24 characters, blank or duplicated, or if a role is
+mistyped; the error names the client but never the key. In any other profile the
+same problems are only logged as warnings, so local runs work without setup.
+
 **What production would do differently.** Keys here come from configuration,
 which is appropriate for a single-tenant deployment. A multi-tenant system
 would store an Argon2 or bcrypt hash per client in the database, support
@@ -100,13 +109,14 @@ after issuance.
 
 ### Rate limiting
 
-The rate limiter buckets on the authenticated `clientId`. It previously keyed
-on `correlationId`, which is unique per request - so every request opened a
-fresh bucket and the limiter never fired. Load testing made this visible:
-**zero rejections across 105,589 requests at 800 req/s** against a configured
-limit. A rate limit bucket has to be keyed on something stable across a
-caller's requests, and before authentication existed there was nothing stable
-to key on.
+The rate limiter buckets on the authenticated `clientId`, the one identifier that
+is stable across a caller's requests and cannot be chosen freely by the caller.
+
+The limit is **1,000 requests per client, per channel, per rolling minute**,
+configurable through `courier.rate-limit.max-requests` or the
+`COURIER_RATE_LIMIT_MAX_REQUESTS` environment variable. Redis outages fail open
+(requests are allowed) because blocking all notifications is worse than briefly
+allowing extra traffic.
 
 ## Delivery Channels
 
@@ -244,7 +254,7 @@ All numbers below were measured on a single MacBook Air running the full stack
 (Kafka, Redis, PostgreSQL, Mailpit and all three services) in Docker Desktop with
 ~4 GB allocated, with k6 generating load on the same host. The load generator and
 the system under test therefore compete for the same CPU - see
-[Methodology](#methodology-why-the-first-runs-were-wrong) below.
+[Methodology](#methodology) below.
 
 ### API throughput
 
@@ -266,11 +276,11 @@ Ramping arrival rate from 50 to 800 req/s over 4 minutes, EMAIL channel, unique
 k6 used 247 of its 2,000 available virtual users, so the generator was not the
 constraint at this level.
 
-Pushing the ramp to 2,500 req/s found the breaking point at roughly **1,150 req/s**:
-p95 rose to 3.87 s, p99 to 12.48 s, 1.19% of requests failed, and 49% of scheduled
-iterations were dropped. Average throughput only rose from 440 to 509 req/s while
-latency degraded by three orders of magnitude - the classic saturation curve where
-extra offered load buys nothing and costs everything.
+Pushing the ramp to 2,500 req/s (current code, with API-key auth) averaged
+747 req/s: p95 195 ms, but p99 rose to 10.7 s, 1.14% of requests failed and about
+25% of scheduled iterations were dropped. The tail collapsing while the median stays
+healthy is the saturation signature - past the knee, extra offered load buys nothing
+and costs everything.
 
 ### End-to-end delivery latency
 
@@ -283,12 +293,12 @@ and both status writes.
 |---|---|
 | Notifications | 2,401 |
 | Delivered | 100% |
-| Latency - min | 17 ms |
-| Latency - median | 59 ms |
-| Latency - p90 | 64 ms |
-| Latency - p95 | 67 ms |
-| Latency - p99 | 201 ms |
-| Latency - max | 468 ms |
+| Latency - min | 16 ms |
+| Latency - median | 63 ms |
+| Latency - p90 | 72 ms |
+| Latency - p95 | 77 ms |
+| Latency - p99 | 254 ms |
+| Latency - max | 1.37 s |
 
 20/s stays well inside the worker's ~141/s capacity, so this measures pipeline
 latency rather than queue depth. Submitting faster than the worker delivers would
@@ -318,23 +328,17 @@ Scaling the worker is a configuration change, not a code change - more replicas 
 more partitions. Partition count is the hard ceiling on parallelism, so going beyond
 3 concurrent consumers means raising the partition count first.
 
-### Methodology: why the first runs were wrong
+### Methodology
 
-The first two runs reported 401 req/s and 263 req/s with median latencies of 390 ms
-and 5.3 s. Both were measuring host CPU contention, not system capacity.
+Everything runs on one laptop, so a result is only meaningful once the load
+generator has been ruled out as the bottleneck. Several worker replicas plus Kafka,
+PostgreSQL, Redis and Mailpit, plus a k6 process driving thousands of virtual users,
+do not fit comfortably in 4 GB of Docker memory: pushing harder then lowers
+throughput, because more generator pressure leaves less CPU for the application,
+which raises latency, which makes k6 need still more virtual users. The tests
+therefore run with **one worker replica**.
 
-Three worker replicas plus Kafka, PostgreSQL, Redis and Mailpit, plus a k6 process
-driving 2,000 virtual users, do not fit comfortably in 4 GB of Docker memory on a
-laptop. Pushing harder made throughput go *down*: more generator pressure meant less
-CPU for the application, which meant higher latency, which meant k6 needed more
-virtual users to sustain the arrival rate.
-
-Dropping to a single worker replica - a change to the test setup, not the code -
-moved median latency from 5.3 s to 4.6 ms and raised sustained throughput to
-440 req/s. A load test result is only meaningful once the load generator has been
-ruled out as the bottleneck.
-
-Two details that matter for anyone re-running these:
+Details that matter for anyone re-running these:
 
 - **Unique `correlationId` per request.** Reusing one would short-circuit every
   request into the idempotency check and measure an indexed `SELECT` rather than
@@ -345,19 +349,37 @@ Two details that matter for anyone re-running these:
   the target regardless and reports what it could not send as `dropped_iterations`.
 - **Poll interval sets the latency measurement floor.** The end-to-end test polls
   for status, so a notification delivered just after a poll is not observed until
-  the next one. At a 250ms interval the median read 260 ms and the p50-to-p99 spread
-  was 24 ms - the shape of a measurement grid, not a latency distribution. Dropping
-  to 50ms moved the median to 59 ms and produced a real tail. The tell was
-  `min=39ms` in the first run: if one delivery finished that fast, a 260 ms median
-  was measuring the poll, not the pipeline.
+  the next one. A coarse interval (250 ms) produces a median near the interval and
+  a tightly clustered distribution - a measurement grid, not a latency
+  distribution. The test polls every 50 ms so the interval stays small relative to
+  the latencies being measured.
 
 ### Running the tests
+
+The load tests send every request from a single client key, so the default
+limit of 1,000/min would reject almost everything. Raise it for the run, with
+one worker replica, and restart the API afterwards to restore the default:
+
+```bash
+COURIER_RATE_LIMIT_MAX_REQUESTS=10000000 docker-compose up -d courier-api
+
+# afterwards, restore the default limit
+docker-compose up -d courier-api
+```
+
+The end-to-end and PEAK=2500 numbers were measured against the current code. The
+PEAK=800 table and the worker-throughput figures come from an earlier build and are
+pending a refresh.
+
+Without the override the limiter does its job: a 20 req/s run is cut to 2,000
+accepted requests over two minutes (1,000/min per window) and the rest receive 429s.
 
 ```bash
 brew install k6
 
-# API throughput - ramping arrival rate, finds the ceiling
-k6 run load-tests/api-throughput.js
+# API throughput - ramping arrival rate. PEAK is the final-stage req/s.
+PEAK=800  k6 run load-tests/api-throughput.js   # sustainable load
+PEAK=2500 k6 run load-tests/api-throughput.js   # finds the ceiling (default)
 
 # End-to-end latency - constant rate, measures submission to DELIVERED
 k6 run load-tests/end-to-end-latency.js
