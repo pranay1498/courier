@@ -258,23 +258,25 @@ the system under test therefore compete for the same CPU - see
 
 ### API throughput
 
-Ramping arrival rate from 50 to 800 req/s over 4 minutes, EMAIL channel, unique
-`correlationId` per request:
+Ramping arrival rate to 800 req/s over 4 minutes (stages at 128, 256, 480 and
+800 req/s, then ramp-down), EMAIL channel, unique `correlationId` per request, one
+client key:
 
 | Metric | Result |
 |---|---|
-| Requests | 105,589 |
-| Sustained rate | 440 req/s (peak stage 800 req/s) |
-| Latency - median | 4.57 ms |
-| Latency - p90 | 34.5 ms |
-| Latency - p95 | 88.8 ms |
-| Latency - p99 | 476 ms |
+| Requests | 86,669 |
+| Average rate | 361 req/s (800 req/s reached in the final stage) |
+| Latency - median | 1.41 ms |
+| Latency - p90 | 3.41 ms |
+| Latency - p95 | 5.39 ms |
+| Latency - p99 | 17.7 ms |
+| Latency - max | 301 ms |
 | Failed requests | 0% |
-| Dropped iterations | 160 (0.15%) |
-| Rate-limiter rejections | 0 |
+| Dropped iterations | 0 |
+| Rate-limiter rejections | 0 (limit raised for the run) |
 
-k6 used 247 of its 2,000 available virtual users, so the generator was not the
-constraint at this level.
+k6 needed at most 8 of its 2,000 available virtual users, so the generator was not
+the constraint.
 
 Pushing the ramp to 2,500 req/s (current code, with API-key auth) averaged
 747 req/s: p95 195 ms, but p99 rose to 10.7 s, 1.14% of requests failed and about
@@ -367,9 +369,8 @@ COURIER_RATE_LIMIT_MAX_REQUESTS=10000000 docker-compose up -d courier-api
 docker-compose up -d courier-api
 ```
 
-The end-to-end and PEAK=2500 numbers were measured against the current code. The
-PEAK=800 table and the worker-throughput figures come from an earlier build and are
-pending a refresh.
+The API-throughput and end-to-end numbers were measured against the current code.
+The worker-throughput figures come from an earlier build and are pending a refresh.
 
 Without the override the limiter does its job: a 20 req/s run is cut to 2,000
 accepted requests over two minutes (1,000/min per window) and the rest receive 429s.
